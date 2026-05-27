@@ -1,28 +1,79 @@
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+import { rawEntries } from './knowledgeEntries.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-async function seed(entries) {
-  console.log(`Seeding ${entries.length} entries...`);
+function chunkByHeadings(entry, minWords = 80) {
+  const lines = entry.markdown.trim().split('\n').map(l => l.trimStart());
+  const raw = [];
+  let heading = null;
+  let body = [];
 
-  for (const entry of entries) {
+  for (const line of lines) {
+    if (/^#{2,3} /.test(line)) {
+      if (heading !== null) {
+        raw.push({ heading, body: body.join('').trim() });
+      }
+      heading = line.replace(/^#+s+/, '');
+      body = [];
+    } else {
+      body.push(line);
+    }
+  }
+  if (heading && body.length) {
+    raw.push({ heading, body: body.join('').trim() });
+  }
+
+  const merged = [];
+  for (const chunk of raw) {
+    const words = chunk.body.split(/s+/).filter(Boolean).length;
+    if (words < minWords && merged.length > 0) {
+      const prev = merged[merged.length - 1];
+      prev.body += '' + chunk.heading + '' + chunk.body;
+    } else {
+      merged.push({ ...chunk });
+    }
+  }
+
+  return merged.map(chunk => ({
+    title: `${entry.title} — ${chunk.heading}`,
+    category: entry.category,
+    content: `Context: ${entry.title}
+
+## ${chunk.heading}
+
+${chunk.body}`,
+    embedding: null,
+    metadata: {
+      ...entry.metadata,
+      parent_topic: entry.title,
+      section: chunk.heading,
+    },
+  }));
+}
+
+async function seed() {
+  const chunks = rawEntries.flatMap(chunkByHeadings);
+  console.log(`Seeding ${chunks.length} chunks from ${rawEntries.length} entries...
+`);
+
+  for (const chunk of chunks) {
     const { error } = await supabase
       .from('coffee_knowledge')
-      .upsert(entry, { onConflict: 'title' });
+      .upsert(chunk, { onConflict: 'title' });
 
     if (error) {
-      console.error(`Failed: ${entry.title}`, error.message);
+      console.error(`  Failed: ${chunk.title}`, error.message);
     } else {
-      console.log(`Seeded: ${entry.title}`);
+      console.log(`  Seeded: ${chunk.title}`);
     }
   }
 
   console.log('Done.');
 }
 
-import { entries } from './knowledgeEntries.js';
-seed(entries);
+seed();
