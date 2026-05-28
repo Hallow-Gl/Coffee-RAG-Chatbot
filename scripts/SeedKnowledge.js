@@ -13,19 +13,21 @@ function chunkByHeadings(entry, minWords = 80) {
   let heading = null;
   let body = [];
 
+  const HEADING_RE = /^#{2,3}\s+(.+)$/;
+
   for (const line of lines) {
-    if (/^#{2,3} /.test(line)) {
+    const trimmed = line.trim();
+    const match = trimmed.match(HEADING_RE);
+
+    if (match) {
       if (heading !== null) {
-        raw.push({ heading, body: body.join('').trim() });
+        raw.push({ heading, body: body.join('\n').trim() });
       }
-      heading = line.replace(/^#+s+/, '');
+      heading = match[1].trim(); // captures only the text after ##
       body = [];
     } else {
       body.push(line);
     }
-  }
-  if (heading && body.length) {
-    raw.push({ heading, body: body.join('').trim() });
   }
 
   const merged = [];

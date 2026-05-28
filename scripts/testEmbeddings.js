@@ -16,7 +16,7 @@ Query: "${query}"`);
     match_count: 5,
   });
   if (error) { console.error(error.message); return; }
-  if (!data.length) { console.log('No results above 0.75 threshold.'); return; }
+  if (!data.length) { console.log('No results above 0.70 threshold.'); return; }
   data.forEach((r, i) => {
     console.log(`${i+1}. [${(r.similarity*100).toFixed(1)}%] ${r.title}`);
   });
