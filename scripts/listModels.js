@@ -12,21 +12,17 @@ async function listModels() {
     return;
   }
 
-  console.log('=== Models that support embedContent ===\n');
-  const embedModels = data.models.filter(m =>
-    m.supportedGenerationMethods?.includes('embedContent')
+  console.log('=== Models that support generateContent ===\n');
+  const chatModels = data.models.filter(m =>
+    m.supportedGenerationMethods?.includes('generateContent')
   );
 
-  if (!embedModels.length) {
-    console.log('NO embedding models found — API key may be restricted.');
-  } else {
-    embedModels.forEach(m => {
-      console.log(`Name:    ${m.name}`);
-      console.log(`Display: ${m.displayName}`);
-      console.log(`Methods: ${m.supportedGenerationMethods.join(', ')}`);
-      console.log('---');
-    });
-  }
+  chatModels.forEach(m => {
+    console.log(`Name:    ${m.name}`);
+    console.log(`Display: ${m.displayName}`);
+    console.log(`Methods: ${m.supportedGenerationMethods.join(', ')}`);
+    console.log('---');
+  });
 }
 
 listModels();

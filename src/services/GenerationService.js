@@ -1,18 +1,31 @@
 import { chatModel } from '../config/gemini.js';
 
 export async function generateAnswer(query, contextChunks) {
-  const context = contextChunks.map(c => c.content).join('');
+  const hasContext = contextChunks.length > 0 && contextChunks[0].similarity !== null;
 
-  const prompt = `You are BrewBuddy, a coffee expert for the Philippines market.
-Use the context below to answer the user's question.
-If the context doesn't cover it, say so honestly.
+  const contextText = contextChunks
+    .map((c, i) => `[Source ${i + 1}] ${c.title}
+${c.content}`)
+    .join('---');
 
-Context:
-${context}
+  const prompt = `You are BrewBuddy, a friendly and knowledgeable coffee assistant
+for the Philippines market. You help budget-conscious students and young
+professionals make smart coffee decisions.
 
-User question: ${query}
+RULES:
+- Answer only from the context below. Do not invent facts.
+- If context does not fully cover the question, say so honestly.
+- Mention Philippine peso prices (₱) when relevant.
+- Keep answers concise and practical — no fluff.
+- For comparison questions, address both sides directly.
+${!hasContext ? '- Note: context may be limited. Give your best general answer.' : ''}
 
-Answer:`;
+CONTEXT:
+${contextText}
+
+USER QUESTION: ${query}
+
+ANSWER:`;
 
   const result = await chatModel.generateContent(prompt);
   return result.response.text();

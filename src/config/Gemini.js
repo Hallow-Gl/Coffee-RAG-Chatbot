@@ -8,4 +8,4 @@ if (!apiKey) {
 }
 
 export const genAI = new GoogleGenerativeAI(apiKey);
-export const chatModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+export const chatModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
