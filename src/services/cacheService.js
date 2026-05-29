@@ -19,7 +19,7 @@ const DEFAULT_TTL = 60 * 60 * 48; // 172800 seconds
  * otherwise the same query bypasses the cache depending on capitalisation.
  */
 export function buildCacheKey(query) {
-  return 'products:' + query.toLowerCase().trim().replace(/s+/g, '-');
+  return 'products:' + query.toLowerCase().trim().replace(/\s+/g, '-');
 }
 
 /**

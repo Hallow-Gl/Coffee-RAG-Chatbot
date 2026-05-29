@@ -205,7 +205,9 @@ Note: there is no test framework or automated test suite configured yet.
 - No migrations, deployment config, API docs, or automated tests are present.
 
 ## Known Issues and Technical Debt
+- CURRENT:
 
+- FIXED:
 - File casing is inconsistent. Files are named `App.js`, `Chat.js`, `Supabase.js`, etc., while imports/scripts use lowercase paths like `src/app.js`, `./routes/chat.js`, and `../config/supabase.js`. This works on case-insensitive Windows filesystems but can fail on Linux deployment. - done
 - Some regexes likely contain typos from escaped whitespace loss: `replace(/s+/g, '-')` and `split(/s+/)` should probably be `\s+`. - done
 - Product cache logic is duplicated between `ProductService.js` and `cacheService.js`; `ProductService` should use `cacheService`.
