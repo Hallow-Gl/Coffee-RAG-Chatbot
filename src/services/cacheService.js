@@ -26,19 +26,23 @@ export function buildCacheKey(query) {
  * Retrieves a cached value. Returns parsed JSON or null if not found / expired.
  * Callers treat null as a cache miss and should call the real API.
  */
+// src/services/cacheService.js — getCached
 export async function getCached(key) {
   try {
     const raw = await redis.get(key);
-    if (!raw) return null;
-    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (raw === null || raw === undefined) return null;
+
+    // Upstash SDK may return already-parsed object or raw string
+    // depending on SDK version and how value was stored
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return raw; }
+    }
+    return raw; // already an object — return as-is
   } catch (err) {
-    // Cache read failure should never crash the app.
-    // Log it and return null so the caller falls back to the real API.
-    console.warn('[cache] read error — falling back to API:', err.message);
+    console.warn('[cache] read error — falling back:', err.message);
     return null;
   }
 }
-
 /**
  * Stores a value in Redis with optional TTL.
  * Serialises to JSON so any JS value can be cached.

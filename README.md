@@ -20,6 +20,6 @@ POST /api/chat
 | Backend | Node.js + Express |
 | Database | Supabase (PostgreSQL + pgvector) |
 | Embeddings | Gemini gemini-embedding-001 |
-| Generation | Gemini 1.5 Flash |
+| Generation | gemini-2.5-flash |
 | Cache | Upstash Redis |
 | Deploy | Render / Railway |

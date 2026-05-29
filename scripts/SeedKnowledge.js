@@ -32,7 +32,7 @@ function chunkByHeadings(entry, minWords = 80) {
 
   const merged = [];
   for (const chunk of raw) {
-    const words = chunk.body.split(/s+/).filter(Boolean).length;
+    const words = chunk.body.split(/\s+/).filter(Boolean).length;
     if (words < minWords && merged.length > 0) {
       const prev = merged[merged.length - 1];
       prev.body += '' + chunk.heading + '' + chunk.body;
