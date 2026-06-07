@@ -48,10 +48,59 @@ export async function getCached(key) {
  * Serialises to JSON so any JS value can be cached.
  * Failures are silently swallowed — a failed cache write is not fatal.
  */
+// src/services/cacheService.js
+// Add TTL jitter — randomise expiry by ±10% to prevent
+// multiple keys from expiring at the exact same moment.
+// This spreads cache refreshes across time rather than clustering them.
+
 export async function setCached(key, value, ttl = DEFAULT_TTL) {
   try {
-    await redis.set(key, JSON.stringify(value), { ex: ttl });
+    // Jitter: add random offset between -10% and +10% of TTL
+    const jitter = Math.floor(ttl * 0.1 * (Math.random() * 2 - 1));
+    const finalTTL = ttl + jitter;
+
+    await redis.set(key, JSON.stringify(value), { ex: finalTTL });
   } catch (err) {
-    console.warn('[cache] write error — continuing without cache:', err.message);
+    console.warn('[cache] write error:', err.message);
+  }
+}
+
+// src/services/cacheService.js — add L2 functions at the bottom
+import { supabase } from '../config/supabase.js';
+
+const L2_TTL_DAYS = 14;
+
+export async function getL2Cached(queryHash) {
+  try {
+    const { data, error } = await supabase
+      .from('product_cache')
+      .select('results, expires_at')
+      .eq('query_hash', queryHash)
+      .single();
+
+    if (error || !data) return null;
+    if (new Date(data.expires_at) < new Date()) return null; // expired
+    return data.results;
+  } catch {
+    return null;
+  }
+}
+
+export async function setL2Cached(queryHash, queryText, results) {
+  try {
+    const expires_at = new Date();
+    expires_at.setDate(expires_at.getDate() + L2_TTL_DAYS);
+
+    await supabase
+      .from('product_cache')
+      .upsert({
+        query_hash: queryHash,
+        query_text: queryText,
+        results,
+        cached_at: new Date().toISOString(),
+        expires_at: expires_at.toISOString(),
+      }, { onConflict: 'query_hash' });
+  } catch (err) {
+    console.warn('[cache-l2] write error:', err.message);
   }
 }
