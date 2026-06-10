@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-Coffee RAG Chatbot is a Node.js/Express backend for "BrewBuddy", an AI coffee recommendation assistant focused on the Philippines market. It answers coffee brewing, gear, troubleshooting, flavor, and budget questions by retrieving relevant coffee knowledge from Supabase pgvector and generating a concise answer with Gemini.
+Coffee RAG Chatbot is a Node.js/Express backend for "BrewBuddy", an AI coffee assistant for the Philippines market. It answers brewing, gear, troubleshooting, flavor, grinder, and budget questions by retrieving coffee knowledge from Supabase pgvector and generating grounded responses with Gemini.
 
-The current user-facing API is a single chat endpoint:
+Primary API:
 
 ```text
 POST /api/chat
@@ -12,114 +12,161 @@ body: { "message": "Why does my espresso taste sour?" }
 response: { "reply": "...", "sources": [...] }
 ```
 
+The repository also includes product-search infrastructure for Philippine shopping queries using SerpAPI with a two-tier cache, but product search is not currently exposed through the chat route.
+
 ## Tech Stack and Dependencies
 
 - Runtime: Node.js >= 18, ES modules (`"type": "module"`).
-- API server: Express 5 with CORS and JSON body parsing.
-- LLM generation: Google Gemini via `@google/generative-ai`, currently `gemini-2.5-flash`.
-- Embeddings: Gemini REST API, `gemini-embedding-001`, expected 3072 dimensions.
-- Database/vector search: Supabase PostgreSQL with pgvector.
-- Cache: Upstash Redis REST client.
-- External product search: SerpAPI Google Shopping through `axios` (present but not wired into the chat route yet).
-- Dev tooling: `nodemon`, `eslint`, `prettier`.
+- API: Express 5, CORS, JSON body parsing.
+- Generation: Google Gemini through `@google/generative-ai`, using `gemini-2.5-flash`.
+- Embeddings: Gemini REST API, `gemini-embedding-001`, 3072-dimensional vectors.
+- Database: Supabase PostgreSQL with pgvector.
+- Cache: Upstash Redis as L1, Supabase `product_cache` as L2.
+- Product search: SerpAPI Google Shopping via `fetch`.
+- Tooling: ESLint 10 flat config, `@eslint/js`, `globals`, `nodemon`, `prettier`.
 
-Main dependencies are listed in `package.json`: `@google/generative-ai`, `@supabase/supabase-js`, `@upstash/redis`, `axios`, `cors`, `dotenv`, and `express`.
+Core dependencies: `@google/generative-ai`, `@supabase/supabase-js`, `@upstash/redis`, `axios`, `cors`, `dotenv`, `express`.
 
 ## Folder and File Structure
 
 ```text
 src/
-  App.js                         Express app entry point, health route, chat route registration
+  app.js                         Express app entry point
   config/
-    Gemini.js                    Gemini API client and chat model
-    Redis.js                     Upstash Redis client
-    Supabase.js                  Supabase service-role client
+    gemini.js                    Gemini client and chat model
+    redis.js                     Upstash Redis client
+    supabase.js                  Supabase service-role client
   middleware/
-    ErrorHandler.js              Express error response middleware
+    errorHandler.js              Central Express error handler
   routes/
-    Chat.js                      POST /api/chat route
+    chat.js                      POST /api/chat route
   services/
-    EmbeddingService.js          Calls Gemini embedding REST endpoint
-    RetrievalService.js          Embeds query and calls Supabase vector RPC
-    GenerationService.js         Builds BrewBuddy prompt and calls Gemini chat model
-    ProductService.js            SerpAPI shopping search with Redis cache
-    cacheService.js              Safer Redis cache abstraction, currently not used elsewhere
+    embeddingService.js          Gemini embedding request
+    retrievalService.js          Query embedding + Supabase vector retrieval
+    generationService.js         BrewBuddy prompt + Gemini generation
+    productService.js            SerpAPI product search with L1/L2 cache
+    cacheService.js              Redis and Supabase product cache helpers
+  eslint.config.js               ESLint flat config
+
+database/
+  scheme.sql                     Tables/extensions: pgvector, knowledge, product cache, sessions
+  functions.sql                  match_coffee_knowledge RPC
 
 scripts/
-  KnowledgeEntries.js            Source coffee knowledge entries
-  SeedKnowledge.js               Chunks markdown entries and upserts rows into Supabase
-  generateEmbeddings.js          Embeds rows missing embeddings
-  TestConnection.js              Checks Supabase coffee_knowledge access
-  testEmbeddings.js              Tests retrieval quality for sample queries
-  testDims.js                    Confirms embedding dimension count
-  testCache.js                   Checks Upstash Redis TTL behavior
-  listModels.js                  Lists Gemini models supporting generateContent
+  KnowledgeEntries.js            Raw markdown coffee knowledge
+  seedKnowledge.js               Chunk and upsert knowledge rows
+  generateEmbeddings.js          Fill null embeddings for knowledge rows
+  testConnection.js              Supabase connection check
+  testEmbeddings.js              Retrieval smoke tests
+  testDims.js                    Embedding dimension check
+  listModels.js                  Gemini model listing
+  testCache.js                   Redis TTL test
+  testCacheEdgeCases.js          Cache key/round-trip tests
+  testProducts.js                Product search/cache smoke test
+  warmCache.js                   Pre-warm common product queries
+  backfillL2Cache.js             Copy warmed Redis entries to Supabase L2
+  testTwoTierCache.js            Verify L2 hit and Redis backfill
 
 README.md                        Short architecture summary
-.env.example                     Required environment variable names
+CONTEXT.md                       This onboarding/context file
+.env.example                     Environment variable template
 ```
 
 ## Architecture and Data Flow
 
-1. `src/App.js` creates the Express app, enables CORS and JSON parsing, exposes `GET /health`, and mounts `chatRouter` at `/api/chat`.
-2. `POST /api/chat` in `src/routes/Chat.js` validates `req.body.message`.
-3. `retrieveContext(query, { topK: 5 })` in `src/services/RetrievalService.js` embeds the user query with `embedText`.
-4. `embedText` in `src/services/EmbeddingService.js` calls Gemini `gemini-embedding-001:embedContent`.
-5. Retrieval calls Supabase RPC `match_coffee_knowledge` with:
-   - `query_embedding`
-   - `match_count`
-   - `filter_category`
-6. If the RPC returns no results, retrieval falls back to the first 3 rows in `coffee_knowledge` with non-null embeddings and marks `similarity: null`.
-7. `generateAnswer(query, chunks)` in `src/services/GenerationService.js` builds a grounded prompt and calls `gemini-2.5-flash`.
-8. The route returns the generated `reply` plus a source list containing chunk `title`, `category`, and percentage `similarity` when available.
+### RAG Chat Flow
+
+1. `src/app.js` starts Express, enables CORS/JSON, exposes `GET /health`, mounts `/api/chat`, and registers `errorHandler`.
+2. `src/routes/chat.js` validates `message` as a non-empty string.
+3. `retrieveContext(query, { topK: 5 })` in `retrievalService.js` embeds the query with `embedText`.
+4. `embedText` calls Gemini `gemini-embedding-001:embedContent`.
+5. Retrieval calls Supabase RPC `match_coffee_knowledge` with `query_embedding`, `match_count`, and optional `filter_category`.
+6. The RPC returns chunks above similarity `0.70`, ordered by cosine distance.
+7. If no chunks match, retrieval falls back to the first 3 embedded `coffee_knowledge` rows and marks `similarity: null`.
+8. `generateAnswer(query, chunks)` builds a BrewBuddy prompt that instructs Gemini to answer only from context, stay concise, mention Philippine peso prices when relevant, and acknowledge missing context.
+9. The route returns `{ reply, sources }`, where `sources` includes title, category, and similarity percentage for real vector matches.
+
+### Product Search Cache Flow
+
+`searchProducts(query)` in `productService.js` is designed for shopping recommendations:
+
+1. Build normalized key with `buildCacheKey(query)`, e.g. `products:hand-grinder`.
+2. Check L1 Redis via `getCached`.
+3. If L1 misses, check L2 Supabase `product_cache` via `getL2Cached`.
+4. If L2 hits, backfill Redis with `setCached`.
+5. If both miss, call SerpAPI Google Shopping for `${query} Philippines`.
+6. Normalize top 8 product results into `{ title, price, link, source, rating, image }`.
+7. Store results in Redis with TTL jitter and Supabase L2 with a 14-day expiry.
+8. Quota exhaustion returns an empty array; retryable network/API errors throw `ProductSearchError`.
 
 ## Key Features
 
-- RAG coffee Q&A: Answers are grounded in seeded coffee knowledge chunks.
-- Philippines-specific guidance: Prompt and knowledge base include local prices, Shopee/Lazada availability, local beans, and beginner budgets.
-- Source transparency: Chat responses include matched source titles/categories/similarity scores.
-- Retrieval fallback: Broad or low-scoring queries still get limited context rather than failing empty.
-- Knowledge seeding: Markdown knowledge entries are chunked by `##`/`###` headings and inserted into Supabase.
-- Embedding generation: Separate script fills null `embedding` fields after seeding.
-- Product search cache layer: SerpAPI + Upstash Redis code exists for shopping results, though it is not currently connected to the chat flow.
+- Grounded coffee Q&A using seeded knowledge chunks and vector search.
+- Philippines-specific coffee advice, including local prices, Shopee/Lazada context, local beans, and student/young professional budgets.
+- Source transparency in chat responses.
+- Fallback retrieval for broad or low-similarity questions.
+- Markdown knowledge seeding by `##`/`###` headings with metadata preservation.
+- Separate embedding generation script for rows missing vectors.
+- Two-tier product cache for common gear/product searches.
+- Cache warming/backfill scripts for deployment or quota protection.
+- Production-aware error responses: raw error messages are hidden when `NODE_ENV=production`.
 
-## APIs, Services, and Models
+## APIs, Services, and Database Models
 
-### Express API
+### HTTP API
 
 - `GET /health`: returns `{ status: "ok", project: "coffee-rag-chatbot" }`.
-- `POST /api/chat`: accepts `{ message: string }`; returns `{ reply, sources }`; returns `400` if message is missing or empty.
+- `POST /api/chat`: accepts `{ message: string }`; returns `{ reply, sources }`; returns `400` for missing/empty messages.
 
-### Supabase Database Assumptions
+### Services
 
-The app expects a `coffee_knowledge` table with at least:
+- `embeddingService.js`: embeds text with Gemini and returns raw vector values.
+- `retrievalService.js`: coordinates query embedding, Supabase RPC search, and fallback retrieval.
+- `generationService.js`: formats context chunks into the final BrewBuddy prompt and calls Gemini.
+- `productService.js`: product lookup, SerpAPI error handling, normalization, and L1/L2 cache flow.
+- `cacheService.js`: Redis key normalization, Redis get/set with JSON tolerance and TTL jitter, Supabase L2 get/set.
 
-- `id`
-- `title`
-- `category`
-- `content`
-- `metadata`
-- `embedding`
+### Database
 
-The app also expects an RPC function named `match_coffee_knowledge` that accepts query embedding, match count, and optional category filter, and returns rows containing `title`, `category`, `content`, `metadata`, and `similarity`. README notes a cosine similarity threshold of `0.70`, likely implemented inside this RPC.
+Defined in `database/scheme.sql`:
 
-No SQL migration/schema file is currently present in the repo, so future agents must inspect Supabase or add migrations before changing schema.
+- `coffee_knowledge`
+  - `id bigint identity primary key`
+  - `title text unique not null`
+  - `category text not null` checked against `brew_guide`, `flavor`, `troubleshoot`, `grind_chart`, `budget_guide`, `gear`
+  - `content text not null`
+  - `embedding vector(3072)`
+  - `metadata jsonb default '{}'`
+  - `created_at timestamptz default now()`
 
-### Gemini
+- `product_cache`
+  - `id bigint identity primary key`
+  - `query_hash text unique not null`
+  - `query_text text`
+  - `results jsonb default '[]'`
+  - `cached_at timestamptz default now()`
+  - `expires_at timestamptz default now() + interval '48 hours'`
+  - index on `query_hash`
 
-- `src/config/Gemini.js`: initializes `GoogleGenerativeAI` with `GEMINI_API_KEY`.
-- Chat model: `gemini-2.5-flash`.
-- Embedding model: `gemini-embedding-001` through direct REST `fetch`.
+- `chat_sessions`
+  - `id uuid primary key default gen_random_uuid()`
+  - `session_key text unique not null`
+  - `messages jsonb default '[]'`
+  - `created_at`, `updated_at`
+  - currently defined but not used by app code.
 
-### Redis and Product Search
+Defined in `database/functions.sql`:
 
-- `src/config/Redis.js`: creates an Upstash Redis client.
-- `src/services/ProductService.js`: searches SerpAPI Google Shopping for `query + " Philippines"` and caches top 5 results for 24 hours.
-- `src/services/cacheService.js`: provides `buildCacheKey`, `getCached`, and `setCached` with a 48-hour default TTL. This is a better abstraction than direct Redis use but is not currently integrated into `ProductService`.
+- `match_coffee_knowledge(query_embedding vector(3072), match_count int default 5, filter_category text default null)`
+  - returns matching `coffee_knowledge` rows with `similarity`
+  - filters out null embeddings
+  - applies optional category filter
+  - requires similarity `> 0.70`
+  - orders by vector distance and limits to `match_count`
 
-## Environment Variables
+## Environment Variables and Configuration
 
-From `.env.example`:
+`.env.example` lists:
 
 ```text
 PORT=3000
@@ -132,9 +179,10 @@ UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 LAZADA_APP_KEY=
 LAZADA_APP_SECRET=
+NODE_ENV=development
 ```
 
-Actually used by current code:
+Used by current code:
 
 - `PORT`
 - `SUPABASE_URL`
@@ -143,14 +191,15 @@ Actually used by current code:
 - `SERPAPI_KEY`
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`
+- `NODE_ENV`
 
-Currently unused but reserved:
+Present but currently unused:
 
 - `SUPABASE_ANON_KEY`
 - `LAZADA_APP_KEY`
 - `LAZADA_APP_SECRET`
 
-## Build, Run, and Test
+## Build, Run, and Test Instructions
 
 Install dependencies:
 
@@ -158,75 +207,84 @@ Install dependencies:
 npm install
 ```
 
-Run development server:
+Run the server:
 
 ```bash
 npm run dev
-```
-
-Run production server:
-
-```bash
 npm start
 ```
 
-Seed knowledge:
+Create database objects in Supabase by running `database/scheme.sql` and `database/functions.sql`.
+
+Seed and embed the knowledge base:
 
 ```bash
 npm run seed
 node scripts/generateEmbeddings.js
 ```
 
-Useful diagnostics:
+Warm and backfill product cache:
 
 ```bash
-node scripts/TestConnection.js
+npm run warm
+node scripts/backfillL2Cache.js
+```
+
+Diagnostics and smoke tests:
+
+```bash
+node scripts/testConnection.js
 node scripts/testDims.js
 node scripts/testEmbeddings.js
 node scripts/testCache.js
+node scripts/testCacheEdgeCases.js
+node scripts/testProducts.js
+node scripts/testTwoTierCache.js
 node scripts/listModels.js
 ```
 
-Lint command:
+Lint:
 
 ```bash
 npm run lint
 ```
 
-Note: there is no test framework or automated test suite configured yet.
+There is no formal automated test framework yet; tests are standalone scripts that require valid API/database/cache credentials.
 
 ## Current Development Status
 
-- Core RAG chat route exists and is conceptually complete.
-- Knowledge base content exists in `scripts/KnowledgeEntries.js`.
-- Seeding and embedding scripts exist.
-- Redis/product search code exists but is not part of the chat endpoint.
-- README is minimal; this `CONTEXT.md` is now the main onboarding document.
-- No migrations, deployment config, API docs, or automated tests are present.
+- Core RAG backend is implemented.
+- Database schema and vector RPC are now tracked in `database/`.
+- Knowledge base and embedding scripts are implemented.
+- Product search and two-tier cache are implemented as services/scripts but not connected to a public API route or chat response path.
+- `chat_sessions` table exists but session persistence is not implemented.
+- ESLint flat config exists under `src/eslint.config.js`.
+- `scripts/warmCache.js` is currently untracked in git (`?? scripts/warmCache.js`).
 
 ## Known Issues and Technical Debt
-- CURRENT:
 
-- FIXED:
-- File casing is inconsistent. Files are named `App.js`, `Chat.js`, `Supabase.js`, etc., while imports/scripts use lowercase paths like `src/app.js`, `./routes/chat.js`, and `../config/supabase.js`. This works on case-insensitive Windows filesystems but can fail on Linux deployment. - done
-- Some regexes likely contain typos from escaped whitespace loss: `replace(/s+/g, '-')` and `split(/s+/)` should probably be `\s+`. - done
-- Product cache logic is duplicated between `ProductService.js` and `cacheService.js`; `ProductService` should use `cacheService`.
-- `ProductService` cache key currently uses `replace(/s+/g, '-')`, so whitespace normalization is probably broken.
-- `cacheService.getCached` parses strings as JSON, but Upstash may already return objects depending on how values were stored.
-- `errorHandler` returns raw error messages to clients, which is useful during development but risky in production.
-- The package scripts reference lowercase script names (`scripts/seedKnowledge.js`, `src/app.js`) while files are PascalCase on disk.
-- `README.md` says Gemini 1.5 Flash in the table, but code uses `gemini-2.5-flash`.  - done
-- Supabase schema/RPC SQL is missing from the repository.
-- ESLint is installed, but no explicit ESLint config is visible.
+- `productService.js` imports `axios` in `package.json`, but current code uses `fetch`; `axios` may be removable if unused elsewhere.
+- `testProducts.js` says it expects `products:hand-grinder-philippines`, but `buildCacheKey('hand grinder')` currently returns `products:hand-grinder`.
+- `seedKnowledge.js` merges short chunks with `prev.body += '' + chunk.heading + '' + chunk.body`, which loses separators/headings and may create awkward merged context.
+- `generateEmbeddings.js` has local embedding logic duplicated from `embeddingService.js`.
+- `cacheService.js` has inline historical comments like `// src/services/cacheService.js` that can be cleaned up.
+- Product search is implemented but not routed; there is no endpoint for product lookup.
+- No auth, rate limiting, request logging, or input size limiting is implemented.
+- No automated test runner or CI config is present.
+- Error handler hides messages in production, but all server errors still become status 500 unless an error has `err.status`.
+- Some console output in source/scripts appears mojibake-encoded for symbols like coffee, arrows, peso signs, and box drawing characters.
 
 ## Coding Patterns and Conventions
 
-- ES modules are used throughout (`import`/`export`).
-- Services are small named-export modules under `src/services`.
-- Config clients live under `src/config` and read from `process.env`.
-- Route handlers use `try/catch` and forward failures to `next(err)`.
-- Chat validation is done at the route boundary before service calls.
-- The RAG prompt explicitly tells Gemini to answer from context, be honest about missing context, include Philippine peso prices when relevant, and stay concise.
-- Knowledge entries are authored as markdown strings, chunked by headings, then stored as rows with metadata.
-- Cache failures are intended to be non-fatal: log a warning and fall back to the real API.
+- Use ES module syntax with explicit `.js` extensions.
+- Keep API route logic thin: validate input, call services, shape response.
+- Keep external clients in `src/config`.
+- Services use named exports and small focused functions.
+- RAG logic is service-oriented: embedding, retrieval, and generation are separate modules.
+- Supabase operations use service-role credentials from environment variables.
+- Cache code is intentionally tolerant: cache read/write failures should not crash product search.
+- Redis keys are normalized to lowercase, trimmed, whitespace-collapsed product keys.
+- Product cache values are JSON-compatible arrays of normalized product objects.
+- Knowledge is authored in markdown entries, chunked by headings, then stored with metadata.
+- Retrieval similarity threshold lives in the SQL RPC, not in JavaScript.
 

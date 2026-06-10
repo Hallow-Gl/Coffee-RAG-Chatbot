@@ -7,6 +7,7 @@
  */
 
 import { redis } from '../config/redis.js';
+import { supabase } from '../config/supabase.js';
 
 // Default TTL: 48 hours in seconds.
 // Coffee product prices on Shopee/Lazada change slowly.
@@ -48,10 +49,6 @@ export async function getCached(key) {
  * Serialises to JSON so any JS value can be cached.
  * Failures are silently swallowed — a failed cache write is not fatal.
  */
-// src/services/cacheService.js
-// Add TTL jitter — randomise expiry by ±10% to prevent
-// multiple keys from expiring at the exact same moment.
-// This spreads cache refreshes across time rather than clustering them.
 
 export async function setCached(key, value, ttl = DEFAULT_TTL) {
   try {
@@ -64,9 +61,6 @@ export async function setCached(key, value, ttl = DEFAULT_TTL) {
     console.warn('[cache] write error:', err.message);
   }
 }
-
-// src/services/cacheService.js — add L2 functions at the bottom
-import { supabase } from '../config/supabase.js';
 
 const L2_TTL_DAYS = 14;
 

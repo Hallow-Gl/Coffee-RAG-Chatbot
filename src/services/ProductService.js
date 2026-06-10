@@ -3,6 +3,7 @@ import {
   getCached, setCached, buildCacheKey,
   getL2Cached, setL2Cached
 } from './cacheService.js';
+import { rerankProducts } from './rerankService.js';
 
 // Custom error class for product retrieval failures.
 // Carries structured info so callers can handle specific cases.
@@ -64,7 +65,13 @@ async function callSerpAPI(query) {
   return data.shopping_results.slice(0, 8).map(normaliseProduct);
 }
 
-export async function searchProducts(query) {
+async function maybeRerankProducts(query, products, shouldRerank) {
+  if (!shouldRerank) return products;
+  return rerankProducts(query, products);
+}
+
+export async function searchProducts(query, options = {}) {
+  const { rerank = true } = options;
   const key  = buildCacheKey(query);
   const hash = key; // query_hash in Supabase uses same normalised key
 
@@ -72,7 +79,7 @@ export async function searchProducts(query) {
   const l1 = await getCached(key);
   if (l1) {
     console.log('[products] L1 hit (Redis):', key);
-    return l1;
+    return maybeRerankProducts(query, l1, rerank);
   }
 
   // L2 — Supabase
@@ -80,7 +87,7 @@ export async function searchProducts(query) {
   if (l2) {
     console.log('[products] L2 hit (Supabase):', key);
     await setCached(key, l2); // backfill Redis
-    return l2;
+    return maybeRerankProducts(query, l2, rerank);
   }
 
   // Miss — call SerpAPI
@@ -89,7 +96,7 @@ export async function searchProducts(query) {
     const results = await callSerpAPI(query);
     await setCached(key, results);              // write L1
     await setL2Cached(hash, query, results);   // write L2
-    return results;
+    return maybeRerankProducts(query, results, rerank);
   } catch (err) {
     if (err.code === 'QUOTA_EXCEEDED') {
       console.warn('[products] quota exceeded — returning empty');
