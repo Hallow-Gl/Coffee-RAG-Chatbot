@@ -15,6 +15,16 @@ const PRODUCT_SIGNALS = [
   '₱', 'pesos', 'php',
 ];
 
+const PRODUCT_TERMS = [
+  'grinder', 'machine', 'maker', 'scale', 'kettle', 'beans',
+  'filter', 'dripper', 'press', 'aeropress', 'v60',
+];
+
+const BREW_METHOD_TERMS = [
+  'french press', 'espresso', 'pour over', 'pourover',
+  'cold brew', 'moka pot', 'aeropress', 'v60',
+];
+
 // signals that the user wants to learn or troubleshoot
 const KNOWLEDGE_SIGNALS = [
   'why', 'how', 'what is', 'explain', 'difference', 'vs',
@@ -27,8 +37,12 @@ export function detectIntent(query) {
 
   const hasProduct   = PRODUCT_SIGNALS.some(s  => q.includes(s));
   const hasKnowledge = KNOWLEDGE_SIGNALS.some(s => q.includes(s));
+  const asksWhatProduct = q.startsWith('what ') && PRODUCT_TERMS.some(s => q.includes(s));
+  const hasBrewMethod = BREW_METHOD_TERMS.some(s => q.includes(s));
 
-  if (hasProduct && hasKnowledge) return 'combined';
+  if ((hasProduct && hasKnowledge) || (hasProduct && asksWhatProduct && hasBrewMethod)) {
+    return 'combined';
+  }
   if (hasProduct)                 return 'product';
   return 'knowledge'; // default — always answer with knowledge
 }
